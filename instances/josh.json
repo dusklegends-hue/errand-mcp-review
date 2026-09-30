@@ -1,0 +1,62 @@
+{
+  "name": "josh",
+  "modes": [
+    "test"
+  ],
+  "mail": {
+    "clientIdEnv": "MS_CLIENT_ID",
+    "tokenFile": "./.ms-tokens.json"
+  },
+  "google": {
+    "clientIdEnv": "GOOGLE_CLIENT_ID",
+    "clientSecretEnv": "GOOGLE_CLIENT_SECRET",
+    "tokenFile": "./.tokens.json"
+  },
+  "serviceHours": {
+    "timeZone": "America/Denver",
+    "open": "09:00",
+    "close": "18:00"
+  },
+  "delivery": {
+    "durationMinutes": 60,
+    "horizonDays": 3
+  },
+  "test": {
+    "scheduleCalendarId": "your-test-calendar-id@group.calendar.google.com",
+    "roster": [
+      {
+        "driver": "Josh",
+        "calendarId": "your-test-calendar-id@group.calendar.google.com",
+        "region": "central"
+      }
+    ]
+  },
+  "regions": {
+    "central": [
+      "00001",
+      "00002",
+      "00003",
+      "00005"
+    ],
+    "east": [
+      "00015",
+      "00025",
+      "00035",
+      "00036"
+    ],
+    "west": [
+      "00012",
+      "00022",
+      "00032"
+    ],
+    "northeast": [
+      "00004",
+      "00024",
+      "00034"
+    ],
+    "south": [
+      "00007",
+      "00027"
+    ]
+  }
+}

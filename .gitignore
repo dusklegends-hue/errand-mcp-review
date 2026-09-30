@@ -1,0 +1,14 @@
+# Secrets and live tokens -- never versioned (Josh's standing rule)
+.env
+.env.*
+.tokens.json
+.ms-tokens.json
+
+# Runtime data: audit log, job ledger, spilled handles (may reference PHI)
+data/
+
+# Build outputs and deps
+node_modules/
+dist/
+.tokens.json.*
+*.dead-*
