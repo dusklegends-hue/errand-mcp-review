@@ -1,7 +1,6 @@
 # errand-mcp — review copy
 
-A small scheduling assistant for non-emergency medical transportation
-dispatch: it reads transport-request emails from one dedicated mailbox
+A small scheduling assistant. it reads transport-request emails from one dedicated mailbox
 (read-only) and books each trip onto a driver's Google Calendar.
 
 This repository is a **review copy**, published so an IT team can read the
