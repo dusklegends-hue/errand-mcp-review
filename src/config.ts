@@ -41,6 +41,10 @@ const envSchema = z.object({
   ERRAND_MCP_SLIP_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(14),
   /** Hours a spilled handle file may live before the startup sweep removes it. */
   ERRAND_MCP_HANDLE_RETENTION_HOURS: z.coerce.number().int().min(1).max(720).default(24),
+  /** Days a ROTATED audit file is kept. The audit log carries no PHI; six
+   *  years matches the HIPAA documentation-retention period. The customer's
+   *  own policy sets the real number. */
+  ERRAND_MCP_AUDIT_RETENTION_DAYS: z.coerce.number().int().min(30).max(3650).default(2190),
 });
 
 /**
@@ -59,8 +63,15 @@ const rosterEntrySchema = z.object({
 });
 
 const modeTargetSchema = z.object({
-  /** Where `schedule` writes. Test points at a scratch calendar on purpose. */
-  scheduleCalendarId: z.string().min(1),
+  /**
+   * The SANDBOX calendar: REQUIRED in test, where every booking lands here
+   * instead of on the assigned driver's calendar -- a test can read real
+   * driver calendars while writing only to a scratch one. REFUSED in live
+   * (see loadInstances): a live booking must land on the driver's own
+   * calendar, or the next availability check cannot see it and the same
+   * driver gets booked twice.
+   */
+  scheduleCalendarId: z.string().min(1).optional(),
   roster: z.array(rosterEntrySchema).min(1),
 });
 
@@ -85,7 +96,17 @@ const instanceSchema = z.object({
     close: z.string().regex(/^\d{2}:\d{2}$/),
   }),
   delivery: z.object({
-    /** Pickup plus delivery, minutes -- the slot length searched for. */
+    /**
+     * How a trip's time is chosen. "appointment" (default, the go-live
+     * requirement): the trip is booked at the time the request states and
+     * a request without an appointment date/time is not bookable.
+     * "soonest": the next free slot in service hours -- the pre-2026-10-07
+     * behavior, kept for instances that genuinely have no appointment.
+     */
+    bookBy: z.enum(["appointment", "soonest"]).default("appointment"),
+    /** Trip length in minutes. Appointment mode uses it only when the
+     *  request states no pick-up time (the trip then starts this long
+     *  before the appointment); soonest mode searches for a slot this long. */
     durationMinutes: z.number().int().min(15).max(480),
     /** Without a horizon, "soonest" happily books three months out. */
     horizonDays: z.number().int().min(1).max(14),
@@ -93,6 +114,13 @@ const instanceSchema = z.object({
   /** Zone -> 5-digit ZIPs it covers. Lets `schedule` derive the delivery
    *  region server-side from the parsed address (PHI-blind). Optional. */
   regions: z.record(z.string(), z.array(z.string().regex(/^\d{5}$/))).optional(),
+  /**
+   * Whether the operator may view an attached request image at all. Off by
+   * default: the image is the whole form, PHI included, and with this off
+   * no tool result carries member data. Images still reach the scheduler's
+   * slip folder either way.
+   */
+  allowImageView: z.boolean().default(false),
   test: modeTargetSchema.optional(),
   live: modeTargetSchema.optional(),
 });
@@ -152,6 +180,18 @@ function loadInstances(dir: string): Map<string, InstanceConfig> {
     for (const mode of inst.modes) {
       if (!inst[mode]) fail(`instance ${inst.name} allows mode "${mode}" but has no "${mode}" target block`);
     }
+    // Test mode must name its sandbox: every test-mode booking lands there,
+    // so a test roster that lists real drivers' calendars (for realistic
+    // availability) can never write to them -- and test writes need no
+    // confirmation, so this is the wall that keeps them off real calendars.
+    if (inst.test && !inst.test.scheduleCalendarId) {
+      fail(`instance ${inst.name}: test.scheduleCalendarId is required -- test-mode bookings must land on a scratch calendar`);
+    }
+    if (inst.live?.scheduleCalendarId) {
+      fail(
+        `instance ${inst.name}: live.scheduleCalendarId is not allowed -- live bookings land on the assigned driver's own calendar so availability sees them`,
+      );
+    }
     instances.set(inst.name, {
       ...inst,
       secrets: {
@@ -196,6 +236,7 @@ function loadConfig() {
     slipDir: resolveFromRoot(env.ERRAND_MCP_SLIP_DIR),
     slipRetentionDays: env.ERRAND_MCP_SLIP_RETENTION_DAYS,
     handleRetentionHours: env.ERRAND_MCP_HANDLE_RETENTION_HOURS,
+    auditRetentionDays: env.ERRAND_MCP_AUDIT_RETENTION_DAYS,
   };
 }
 

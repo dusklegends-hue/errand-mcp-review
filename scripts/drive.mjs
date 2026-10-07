@@ -1,17 +1,16 @@
 // Drive a built tool handler without an MCP client, for rehearsal and
-// debugging:  node scripts/drive.mjs <email|calendar|dispatch> '<json args>'
+// debugging:  node scripts/drive.mjs <email|calendar|fetch_handle> '<json args>'
 // Args are the tool's schema minus nothing -- instance and mode included.
 
 const [, , tool, rawArgs] = process.argv;
 if (!tool || !rawArgs) {
-  console.error(`usage: node scripts/drive.mjs <email|calendar|dispatch|fetch_handle> '<json args>'`);
+  console.error(`usage: node scripts/drive.mjs <email|calendar|fetch_handle> '<json args>'`);
   process.exit(1);
 }
 
 const mods = {
   email: ["../dist/tools/email.js", "handleEmail"],
   calendar: ["../dist/tools/calendar.js", "handleCalendar"],
-  dispatch: ["../dist/tools/dispatch.js", "handleDispatch"],
   fetch_handle: ["../dist/tools/handles.js", "handleFetchHandle"],
 };
 const entry = mods[tool];

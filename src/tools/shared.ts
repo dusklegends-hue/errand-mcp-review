@@ -146,7 +146,10 @@ export async function runAction(opts: RunActionOptions): Promise<CallToolResult>
     if (opts.resultContent) return opts.resultContent(result);
     return ok({ status: "ok", ...result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Capped like the audit copy. This server's own messages name fields
+    // and rules, never request values; upstream errors arrive already
+    // reduced to status + code (util/http.ts).
+    const message = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     await appendAuditEvent({
       ...auditBase,
       decision: auditDecision,

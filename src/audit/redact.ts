@@ -14,9 +14,10 @@ const SECRET_KEY_PATTERN = /token|password|secret|authorization|credential/i;
 // One entry per field the IT brief's "data in scope" list names, plus the
 // legacy shapes. Matching is deliberately greedy: a new PHI-shaped key
 // should default to redacted, and over-redaction costs nothing but detail
-// in a log line.
+// in a log line. `query`/`search` (2026-10-07): a free-text mailbox search
+// is typed by the operator and can be a member's name.
 const PII_KEY_PATTERN =
-  /patient|member|name|pickup|deliver|dest|address|phone|whatsapp|recipient|passenger|special|impair|appointment|mileage/i;
+  /patient|member|name|pickup|deliver|dest|address|phone|whatsapp|recipient|passenger|special|impair|appointment|mileage|query|search/i;
 const MAX_STRING_LEN = 200;
 
 export function redactParams(params: Record<string, unknown>): Record<string, unknown> {

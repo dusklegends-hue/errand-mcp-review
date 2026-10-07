@@ -20,56 +20,124 @@ export interface ParsedOrder {
   member: string;
   pickupFrom: string;
   deliverTo: string;
+  /** Raw labeled values, read in the service time zone by calendar/trip.ts. */
+  appointmentDate?: string;
+  appointmentTime?: string;
+  /** The request's own "Pick-up Time", when the requester states one. */
+  pickupTime?: string;
 }
 
 export interface ParseResult {
   order: ParsedOrder | null;
-  /** Field names that had no labeled line -- empty when `order` is set. */
+  /** Required field names that had no labeled line -- empty when `order` is set. */
   missing: string[];
+  /** How many labeled fields were found at all; 0 means "not a request". */
+  found: number;
 }
 
-/** Line-anchored label alternatives per field. Order of fields matters for masking. */
-const FIELD_PATTERNS: Array<{ field: keyof ParsedOrder; re: RegExp }> = [
+type Field = keyof ParsedOrder;
+
+/**
+ * Line-anchored label alternatives per field. The time and date labels come
+ * FIRST: "Pick-up Time" must never be read as a pick-up address, and a line
+ * labels at most one field.
+ */
+const FIELD_PATTERNS: Array<{ field: Field; re: RegExp }> = [
+  { field: "pickupTime", re: /^\s*pick-?up time\s*[:\-]\s*(.+)\s*$/i },
+  { field: "appointmentDate", re: /^\s*(?:date of (?:the )?appointment|appointment date|appt\.? date)\s*[:\-]\s*(.+)\s*$/i },
+  { field: "appointmentTime", re: /^\s*(?:time of (?:the )?appointment|appointment time|appt\.? time)\s*[:\-]\s*(.+)\s*$/i },
   { field: "member", re: /^\s*(?:member['’]?s? name|member|patient(?: name)?|name)\s*[:\-]\s*(.+)\s*$/i },
   { field: "pickupFrom", re: /^\s*(?:pick-?up(?: from| location| address)?|collect from)\s*[:\-]\s*(.+)\s*$/i },
   { field: "deliverTo", re: /^\s*(?:deliver(?: to)?|delivery address|destination(?: location| address)?|drop-?off|address)\s*[:\-]\s*(.+)\s*$/i },
 ];
 
-export function parseOrder(bodyText: string): ParseResult {
+/** "Appointment: 09/02/2026 10:00 AM" -- one line carrying both halves. */
+const COMBINED_APPOINTMENT = /^\s*(?:appointment(?: date\s*(?:\/|and|&)\s*time)?|appt\.?)\s*[:\-]\s*(.+)\s*$/i;
+const DATE_THEN_TIME = /^(\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4})\s*(?:at|@|,)?\s*(.+)$/i;
+
+const BASE_REQUIRED: Field[] = ["member", "pickupFrom", "deliverTo"];
+const APPOINTMENT_REQUIRED: Field[] = ["appointmentDate", "appointmentTime"];
+
+/**
+ * `requireAppointment` makes the appointment date and time required fields,
+ * which is how an instance that books by appointment time treats a request
+ * without them: incomplete, not bookable.
+ */
+export function parseOrder(bodyText: string, opts: { requireAppointment?: boolean } = {}): ParseResult {
   const found: Partial<ParsedOrder> = {};
   for (const line of bodyText.split(/\r?\n/)) {
+    let labeled = false;
     for (const { field, re } of FIELD_PATTERNS) {
-      if (found[field]) continue; // first labeled line wins
       const m = re.exec(line);
       if (m) {
-        found[field] = m[1].trim();
+        if (!found[field]) found[field] = m[1].trim(); // first labeled line wins
+        labeled = true;
         break; // a line labels at most one field
       }
     }
+    if (labeled) continue;
+    const c = COMBINED_APPOINTMENT.exec(line);
+    if (c && !found.appointmentDate) {
+      const split = DATE_THEN_TIME.exec(c[1].trim());
+      found.appointmentDate = split ? split[1] : c[1].trim();
+      if (split && !found.appointmentTime) found.appointmentTime = split[2].trim();
+    }
   }
-  const missing = FIELD_PATTERNS.map((f) => f.field).filter((f) => !found[f]);
+  const required = opts.requireAppointment ? [...BASE_REQUIRED, ...APPOINTMENT_REQUIRED] : BASE_REQUIRED;
+  const missing = required.filter((f) => !found[f]);
+  const count = Object.values(found).filter(Boolean).length;
   return missing.length > 0
-    ? { order: null, missing }
-    : { order: found as ParsedOrder, missing: [] };
+    ? { order: null, missing, found: count }
+    : { order: found as ParsedOrder, missing: [], found: count };
 }
 
 /**
- * Masks the VALUES of labeled order fields so a mail-list preview can show
- * "there is an order here" without carrying the member data itself.
- * Unlabeled text passes through -- the subject/preview template agreed with
- * the requester must not put PHI outside labeled lines.
+ * US request dates: MM/DD/YYYY (also M/D/YY, dashes or dots) or ISO
+ * YYYY-MM-DD. Null for anything else or an impossible date -- the caller
+ * reports "unreadable" rather than guessing.
  */
-export function maskOrderPii(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) => {
-      for (const { re } of FIELD_PATTERNS) {
-        const m = re.exec(line);
-        if (m) return line.slice(0, line.length - m[1].trim().length - (line.length - line.trimEnd().length)).trimEnd() + " ▎▎▎";
-      }
-      return line;
-    })
-    .join("\n");
+export function parseDateValue(s: string): { year: number; month: number; day: number } | null {
+  const t = s.trim();
+  let year: number;
+  let month: number;
+  let day: number;
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
+  if (m) {
+    [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  } else if ((m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})$/.exec(t))) {
+    [month, day, year] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    if (m[3].length === 2) year += 2000;
+  } else {
+    return null;
+  }
+  // Round-trip through Date.UTC rejects 02/30 and 13/01.
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) return null;
+  return { year, month, day };
+}
+
+/**
+ * "10:00 AM", "9:15am", "2 p.m.", or unambiguous 24-hour "14:30" / "00:30".
+ * Anything that could be either AM or PM -- "10", "2:00", "6:00" -- is
+ * refused: a missing AM/PM fails safe instead of booking a plausible-looking
+ * wrong time (customer IT review, 2026-10-07).
+ */
+export function parseTimeValue(s: string): { hour: number; minute: number } | null {
+  const t = s.trim().toLowerCase().replace(/\./g, "");
+  const m = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/.exec(t);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = m[2] ? Number(m[2]) : 0;
+  if (minute > 59) return null;
+  if (m[3]) {
+    if (hour < 1 || hour > 12) return null;
+    if (hour === 12) hour = 0;
+    if (m[3] === "pm") hour += 12;
+  } else {
+    // Without AM/PM only 24-hour readings that cannot be 12-hour pass.
+    if (!m[2] || hour > 23 || (hour >= 1 && hour <= 12)) return null;
+  }
+  return { hour, minute };
 }
 
 /**

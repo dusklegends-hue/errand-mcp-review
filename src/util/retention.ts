@@ -1,9 +1,10 @@
 /**
  * Retention sweeps (2026-09-01): the slip folder and spilled handle files are
  * the only disk locations that can carry PHI, and both are time-limited by
- * design. Sweeps run at startup and are fire-and-forget -- a failed delete
- * (file open in the scheduler's viewer, say) is retried next start rather
- * than failing anything.
+ * design. Rotated audit files (no PHI) get a long window of their own
+ * (2026-10-07). Sweeps run at startup and daily, fire-and-forget -- a failed
+ * delete (file open in the scheduler's viewer, say) is retried next sweep
+ * rather than failing anything.
  */
 import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
@@ -34,6 +35,38 @@ export async function sweepSlips(
   }
   for (const dir of expiredDateDirs(names, retentionDays, todayISO)) {
     await rm(path.join(slipDir, dir), { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** Rotation stamp as log.ts writes it: ISO time with ":" and "." made "-". */
+const ROTATION_STAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/;
+
+/**
+ * Pure decision: which rotated audit files (`<base>.<stamp>`) are older than
+ * the retention window. A rotation stamp is when that file stopped growing,
+ * so every entry in it is at least that old -- nothing is deleted early.
+ * The live log itself is never a candidate.
+ */
+export function expiredAuditRotations(names: string[], baseName: string, retentionDays: number, now: number): string[] {
+  const cutoff = now - retentionDays * 86_400_000;
+  return names.filter((n) => {
+    if (!n.startsWith(`${baseName}.`)) return false;
+    const m = ROTATION_STAMP.exec(n.slice(baseName.length + 1));
+    if (!m) return false;
+    return Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`) < cutoff;
+  });
+}
+
+export async function sweepAuditRotations(auditLogPath: string, retentionDays: number, now: number = Date.now()): Promise<void> {
+  const dir = path.dirname(auditLogPath);
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const name of expiredAuditRotations(names, path.basename(auditLogPath), retentionDays, now)) {
+    await rm(path.join(dir, name), { force: true }).catch(() => {});
   }
 }
 

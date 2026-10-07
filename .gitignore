@@ -1,6 +1,7 @@
 # Secrets and live tokens -- never versioned (Josh's standing rule)
 .env
 .env.*
+!.env.example
 .tokens.json
 .ms-tokens.json
 

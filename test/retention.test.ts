@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expiredDateDirs } from "../src/util/retention.js";
+import { expiredAuditRotations, expiredDateDirs } from "../src/util/retention.js";
 import { localDateParts, orderRef, safeName, slipExt, slipRelPath } from "../src/slips/slips.js";
 
 describe("expiredDateDirs", () => {
@@ -15,6 +15,26 @@ describe("expiredDateDirs", () => {
 
   it("never touches non-date names", () => {
     expect(expiredDateDirs(["Bob", "handles", "2026-13-99x"], 1, "2026-09-01")).toEqual([]);
+  });
+});
+
+describe("expiredAuditRotations", () => {
+  const now = Date.parse("2026-10-07T12:00:00Z");
+  const names = [
+    "audit.jsonl", // the live log -- never a candidate
+    "audit.jsonl.2019-01-01T00-00-00-000Z",
+    "audit.jsonl.2026-01-01T00-00-00-000Z",
+    "audit.jsonl.notes",
+    "jobs.jsonl.2019-01-01T00-00-00-000Z", // another file's rotation
+  ];
+
+  it("deletes only rotated audit files older than the window", () => {
+    expect(expiredAuditRotations(names, "audit.jsonl", 2190, now)).toEqual(["audit.jsonl.2019-01-01T00-00-00-000Z"]);
+  });
+
+  it("matches the stamp format log.ts writes", () => {
+    const stamp = new Date("2020-03-04T05:06:07.089Z").toISOString().replace(/[:.]/g, "-");
+    expect(expiredAuditRotations([`audit.jsonl.${stamp}`], "audit.jsonl", 30, now)).toEqual([`audit.jsonl.${stamp}`]);
   });
 });
 

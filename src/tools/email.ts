@@ -5,7 +5,7 @@ import { config, getInstance } from "../config.js";
 import { buildListEnvelope, spillBinaryHandle } from "../envelope/envelope.js";
 import { Ledger } from "../ledger/ledger.js";
 import { getAttachment, listInbox } from "../mail/graph.js";
-import { maskOrderPii } from "../mail/order.js";
+import { neutralAttachmentName, safeContentType, safeListing } from "../mail/listing.js";
 import { commonShape, errorResult, ok, requireFields, runAction, type CommonArgs } from "./shared.js";
 
 const ACTIONS = ["list", "get_attachment"] as const;
@@ -66,12 +66,13 @@ export async function handleEmail(args: Args): Promise<CallToolResult> {
             listInbox(inst, { limit, sinceDays, search: args.query }),
             ledger.load(),
           ]);
-          // Each message carries its pipeline state, so "which of these have
-          // I already dispatched" never needs a second tool call.
+          // PHI-blind (tightened 2026-10-07): no subject, preview, or other
+          // sender-typed text -- only server-derived fields. Each message
+          // carries its pipeline state, so "which of these are already
+          // booked" never needs a second tool call.
+          const requireAppointment = inst.delivery.bookBy === "appointment";
           const items = mail.map((m) => ({
-            ...m,
-            // PHI-blind: labeled order values are masked in previews.
-            bodyPreview: maskOrderPii(m.bodyPreview),
+            ...safeListing(m, requireAppointment),
             job_state: jobs.get(`${args.instance}:${args.mode}:${m.id}`)?.state ?? null,
           }));
           return buildListEnvelope(items, "messages");
@@ -88,7 +89,16 @@ export async function handleEmail(args: Args): Promise<CallToolResult> {
         action: "get_attachment",
         auditParams: { mail_id: args.mail_id, attachment_id: args.attachment_id ?? null, disposition },
         execute: async () => {
+          if (!inst.allowImageView) {
+            throw new Error(
+              "viewing request images is disabled for this instance (PHI-blind) -- the image is filed in the scheduler's slip folder when the trip is booked",
+            );
+          }
           const att = await getAttachment(inst, args.mail_id!, args.attachment_id);
+          // Reported under a neutral name derived from the request ref --
+          // the sender's file name is never fetched (customer IT, 2026-10-07).
+          const name = neutralAttachmentName(args.mail_id!, att.contentType);
+          const contentType = safeContentType(att.contentType);
           // First touch of a message marks it seen, so the ledger records the
           // pipeline started even if scheduling never happens.
           const existing = await ledger.get(args.instance, args.mode, args.mail_id!);
@@ -99,13 +109,13 @@ export async function handleEmail(args: Args): Promise<CallToolResult> {
             return {
               inline: true,
               attachment_id: att.attachmentId,
-              name: att.name,
-              content_type: att.contentType,
+              name,
+              content_type: contentType,
               base64: att.bytes.toString("base64"),
             };
           }
-          const spilled = await spillBinaryHandle(att.bytes, att.contentType);
-          return { attachment_id: att.attachmentId, name: att.name, ...spilled };
+          const spilled = await spillBinaryHandle(att.bytes, contentType);
+          return { attachment_id: att.attachmentId, name, ...spilled };
         },
         resultContent: (result) => {
           const r = result as Record<string, unknown>;
@@ -140,7 +150,7 @@ export function registerEmailTool(server: McpServer): void {
     {
       title: "Transport request mail",
       description:
-        "Read transport-request emails from the instance's Outlook mailbox. `list` shows recent inbox messages with their pipeline state; `get_attachment` pulls the request-form photo -- as a disk handle by default, or as an inline image block with disposition:\"inline\" when the form needs to be read. Labeled request values in previews are masked (PHI-blind). Read-only: nothing here can send, move, or delete mail.",
+        "Read transport-request emails from the instance's Outlook mailbox. `list` shows recent inbox messages as server-derived facts only -- ref, mail_id, received time, sender domain, whether the request is complete enough to book (and which labeled fields are missing if not), and its pipeline state. No subject, body text, or file names are ever returned (PHI-blind). `get_attachment` pulls the request-form image, only on instances that enable image view (off by default): a disk handle by default, or an inline image block with disposition:\"inline\". Read-only: nothing here can send, move, or delete mail.",
       inputSchema: inputShape,
     },
     handleEmail,

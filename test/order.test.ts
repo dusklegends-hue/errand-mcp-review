@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskOrderPii, parseOrder, regionForAddress, stripHtml } from "../src/mail/order.js";
+import { parseDateValue, parseOrder, parseTimeValue, regionForAddress, stripHtml } from "../src/mail/order.js";
 
 const BODY = [
   "New delivery order #4821",
@@ -42,13 +42,94 @@ describe("parseOrder", () => {
   });
 });
 
-describe("maskOrderPii", () => {
-  it("masks labeled values and keeps unlabeled lines", () => {
-    const masked = maskOrderPii(BODY);
-    expect(masked).not.toContain("Jane Doe");
-    expect(masked).not.toContain("Maple Ave");
-    expect(masked).toContain("New delivery order #4821");
-    expect(masked).toContain("Notes: leave at door");
+describe("appointment fields", () => {
+  // The Transportation Request form's labels.
+  const FORM = [
+    "Member's Name: Rita Reyes",
+    "Date of the Appointment: 09/02/2026",
+    "Time of the Appointment: 10:00 AM",
+    "Pick-Up: 100 Example St, Springfield 00002",
+    "Pick-up Time: 9:15 AM",
+    "Destination: 410 Maple Ave, Springfield 00015",
+  ].join("\n");
+
+  it("reads the form's appointment date, appointment time, and pick-up time", () => {
+    const r = parseOrder(FORM, { requireAppointment: true });
+    expect(r.order).toEqual({
+      member: "Rita Reyes",
+      pickupFrom: "100 Example St, Springfield 00002",
+      deliverTo: "410 Maple Ave, Springfield 00015",
+      appointmentDate: "09/02/2026",
+      appointmentTime: "10:00 AM",
+      pickupTime: "9:15 AM",
+    });
+  });
+
+  it("never reads 'Pick-up Time' as the pick-up address", () => {
+    const r = parseOrder("Pick-up Time: 9:15 AM\nMember: A\nPick-Up: 1 Sun St\nDestination: 2 Moon St");
+    expect(r.order?.pickupFrom).toBe("1 Sun St");
+    expect(r.order?.pickupTime).toBe("9:15 AM");
+  });
+
+  it("splits a combined 'Appointment:' line into date and time", () => {
+    const r = parseOrder("Appointment: 10/09/2026 2:30 PM");
+    expect(r.order).toBeNull();
+    expect(r.found).toBe(2);
+    const full = parseOrder(`Member: A\nPick-Up: X\nDestination: Y\nAppointment: 10/09/2026 at 2:30 PM`, { requireAppointment: true });
+    expect(full.order?.appointmentDate).toBe("10/09/2026");
+    expect(full.order?.appointmentTime).toBe("2:30 PM");
+  });
+
+  it("requires the appointment only when asked to", () => {
+    const body = "Member: A\nPick-Up: X\nDestination: Y";
+    expect(parseOrder(body).order).not.toBeNull();
+    const r = parseOrder(body, { requireAppointment: true });
+    expect(r.order).toBeNull();
+    expect(r.missing).toEqual(["appointmentDate", "appointmentTime"]);
+  });
+
+  it("counts found fields so 'not a request' is distinguishable from 'incomplete'", () => {
+    expect(parseOrder("Hello, lunch Friday?").found).toBe(0);
+    expect(parseOrder("Member: A").found).toBe(1);
+  });
+});
+
+describe("parseDateValue", () => {
+  it("reads US and ISO dates", () => {
+    expect(parseDateValue("09/02/2026")).toEqual({ year: 2026, month: 9, day: 2 });
+    expect(parseDateValue("9/2/26")).toEqual({ year: 2026, month: 9, day: 2 });
+    expect(parseDateValue("2026-09-02")).toEqual({ year: 2026, month: 9, day: 2 });
+    expect(parseDateValue("09-02-2026")).toEqual({ year: 2026, month: 9, day: 2 });
+  });
+
+  it("refuses impossible or unrecognized dates instead of guessing", () => {
+    expect(parseDateValue("02/30/2026")).toBeNull();
+    expect(parseDateValue("13/01/2026")).toBeNull();
+    expect(parseDateValue("Sept 2nd")).toBeNull();
+    expect(parseDateValue("")).toBeNull();
+  });
+});
+
+describe("parseTimeValue", () => {
+  it("reads 12-hour and 24-hour times", () => {
+    expect(parseTimeValue("10:00 AM")).toEqual({ hour: 10, minute: 0 });
+    expect(parseTimeValue("9:15am")).toEqual({ hour: 9, minute: 15 });
+    expect(parseTimeValue("2 p.m.")).toEqual({ hour: 14, minute: 0 });
+    expect(parseTimeValue("12:30 PM")).toEqual({ hour: 12, minute: 30 });
+    expect(parseTimeValue("12:05 AM")).toEqual({ hour: 0, minute: 5 });
+    expect(parseTimeValue("14:30")).toEqual({ hour: 14, minute: 30 });
+  });
+
+  it("refuses ambiguous or malformed times", () => {
+    expect(parseTimeValue("10")).toBeNull();
+    // No AM/PM and readable either way: refused, never guessed.
+    expect(parseTimeValue("2:00")).toBeNull();
+    expect(parseTimeValue("6:00")).toBeNull();
+    expect(parseTimeValue("12:00")).toBeNull();
+    expect(parseTimeValue("00:30")).toEqual({ hour: 0, minute: 30 });
+    expect(parseTimeValue("13:00 PM")).toBeNull();
+    expect(parseTimeValue("9:75 AM")).toBeNull();
+    expect(parseTimeValue("noon")).toBeNull();
   });
 });
 

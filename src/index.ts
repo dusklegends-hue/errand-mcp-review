@@ -3,21 +3,23 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { config } from "./config.js";
 import { configureConfirmTtl } from "./gate/confirmations.js";
 import { registerAllTools } from "./tools/index.js";
-import { sweepHandles, sweepSlips } from "./util/retention.js";
+import { sweepAuditRotations, sweepHandles, sweepSlips } from "./util/retention.js";
 
 async function main(): Promise<void> {
   configureConfirmTtl(config.confirmTtlMs);
 
   // Retention sweeps: the slip folder and spilled handles are the only disk
   // locations that can carry PHI; both are time-limited by design. Swept at
-  // startup AND daily thereafter — a long-lived process must not let the
-  // retention window lapse just because nobody restarted it.
+  // startup AND hourly thereafter -- a long-lived process must not let the
+  // retention window lapse just because nobody restarted it, and hourly
+  // keeps the 24-hour handle window within the hour.
   const sweep = () => {
     void sweepSlips(config.slipDir, config.slipRetentionDays);
     void sweepHandles(config.handleDir, config.handleRetentionHours);
+    void sweepAuditRotations(config.auditLogPath, config.auditRetentionDays);
   };
   sweep();
-  setInterval(sweep, 24 * 60 * 60 * 1000).unref();
+  setInterval(sweep, 60 * 60 * 1000).unref();
 
   const server = new McpServer({ name: "errand-mcp", version: "0.1.0" });
   registerAllTools(server);

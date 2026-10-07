@@ -1,6 +1,6 @@
 # errand-mcp — review copy
 
-A small scheduling assistant. it reads transport-request emails from one dedicated mailbox
+A small scheduling assistant. It reads transport-request emails from one dedicated mailbox
 (read-only) and books each trip onto a driver's Google Calendar.
 
 This repository is a **review copy**, published so an IT team can read the
@@ -8,6 +8,10 @@ source in the browser. The program logic is identical to the working
 repository. Customer-identifying details were removed from a few code
 comments, the test data, and the example configuration, and the test images
 are omitted.
+
+**Updated 2026-10-07** in response to the IT team's six review questions —
+the brief's first section, *Changes on 2026-10-07, by your question*, maps
+each question to what changed in the code.
 
 **Start with [`docs/IT-REVIEW.md`](docs/IT-REVIEW.md)**: the security and
 data-handling brief, covering network surface, permissions, where data
@@ -20,7 +24,7 @@ Requires Node.js 20 or newer.
 
 ```
 npm ci
-npm test        # 68 automated tests
+npm test        # 127 automated tests
 npm run build   # strict TypeScript build
 ```
 

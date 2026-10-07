@@ -3,7 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { config } from "../config.js";
+import { config, getInstance } from "../config.js";
 import { commonShape, errorResult, ok, runAction, type CommonArgs } from "./shared.js";
 
 const inputShape = {
@@ -36,6 +36,11 @@ export async function handleFetchHandle(args: Args): Promise<CallToolResult> {
       const ext = path.extname(match).toLowerCase();
       if (ext === ".json") {
         return { kind: "json", text: await readFile(full, "utf8") };
+      }
+      // Image handles obey the same switch as get_attachment: with image view
+      // off, no path returns a request image to the operator.
+      if (!getInstance(args.instance)?.allowImageView) {
+        throw new Error("viewing request images is disabled for this instance (PHI-blind)");
       }
       const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
       return { kind: "image", base64: (await readFile(full)).toString("base64"), mime };

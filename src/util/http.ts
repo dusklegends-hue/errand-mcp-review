@@ -21,25 +21,30 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
 
 /**
- * Each upstream wraps its errors differently; this flattens all three to one
- * (code, message) pair so a failure in the transcript names the real cause.
- *   Graph:  { error: { code, message } }
- *   Google: { error: { code, message, errors } }
- *   Meta:   { error: { code, message, error_subcode } }
+ * Each upstream wraps its errors differently; this flattens both to one
+ * machine CODE -- never the upstream's message text. Upstream messages can
+ * quote what was sent (a Graph $search syntax error quotes the search,
+ * which may be a member's name), and an error travels to the operator and
+ * into the audit log. The code plus the HTTP status is enough to diagnose;
+ * the prose is not worth the leak (customer IT review, 2026-10-07).
+ *   Graph:  { error: { code: "ErrorItemNotFound", message } }
+ *   Google: { error: { code: 404, status: "NOT_FOUND", errors: [{ reason: "notFound" }], message } }
  */
-function extractError(body: unknown): { code: string; message: string } {
+export function extractErrorCode(body: unknown): string {
+  let code: unknown = "unknown";
   if (body && typeof body === "object" && "error" in body) {
     const e = (body as { error: unknown }).error;
     if (e && typeof e === "object") {
       const err = e as Record<string, unknown>;
-      return {
-        code: String(err.code ?? "unknown"),
-        message: String(err.message ?? JSON.stringify(err)),
-      };
+      const reason = Array.isArray(err.errors) ? (err.errors[0] as Record<string, unknown> | undefined)?.reason : undefined;
+      code = reason ?? err.status ?? err.code ?? "unknown";
+    } else if (typeof e === "string") {
+      code = e; // OAuth token endpoints: { error: "invalid_grant" }
     }
-    return { code: "unknown", message: String(e) };
   }
-  return { code: "unknown", message: typeof body === "string" ? body : JSON.stringify(body) };
+  // An enumeration-shaped token or nothing: never free text, not even squashed.
+  const token = String(code);
+  return /^[A-Za-z0-9_.-]{1,60}$/.test(token) ? token : "unknown";
 }
 
 function sleep(ms: number): Promise<void> {
@@ -65,9 +70,9 @@ export async function request(
     let res: Response;
     try {
       res = await fetch(url, { method: opts.method ?? "GET", headers: opts.headers, body: opts.body });
-    } catch (err) {
+    } catch {
       // Network-level failure: no status to key on, retry with backoff.
-      lastError = new UpstreamError(upstream, 0, "network", (err as Error).message, true);
+      lastError = new UpstreamError(upstream, 0, "network", "network error (no response)", true);
       await sleep(500 * attempt);
       continue;
     }
@@ -78,7 +83,14 @@ export async function request(
       }
       // 204s and empty bodies are legal success shapes (events.delete).
       const text = await res.text();
-      return { status: res.status, json: text ? JSON.parse(text) : null, bytes: null, headers: res.headers };
+      let json: unknown = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        // A SyntaxError's message quotes the body it choked on.
+        throw new UpstreamError(upstream, res.status, "invalid_json", `HTTP ${res.status} invalid_json`, false);
+      }
+      return { status: res.status, json, bytes: null, headers: res.headers };
     }
 
     let body: unknown = null;
@@ -87,9 +99,9 @@ export async function request(
     } catch {
       body = await res.text().catch(() => "");
     }
-    const { code, message } = extractError(body);
+    const code = extractErrorCode(body);
     const retryable = RETRYABLE_STATUS.has(res.status);
-    lastError = new UpstreamError(upstream, res.status, code, message, retryable);
+    lastError = new UpstreamError(upstream, res.status, code, `HTTP ${res.status} ${code}`, retryable);
     if (!retryable) throw lastError;
 
     // Honor Retry-After when the upstream names a wait; otherwise back off

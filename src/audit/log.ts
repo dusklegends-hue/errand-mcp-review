@@ -24,6 +24,13 @@ export interface AuditEvent {
   outcomeVerified?: boolean | null;
 }
 
+/**
+ * Error text is capped before it is written. Errors this server raises
+ * itself never quote request values, but upstream (Graph/Google) messages
+ * are not ours to vouch for -- the cap bounds what one can carry.
+ */
+const MAX_ERROR_LEN = 300;
+
 let dirEnsured = false;
 async function ensureDir(): Promise<void> {
   if (dirEnsured) return;
@@ -64,7 +71,7 @@ export async function appendAuditEvent(event: AuditEvent): Promise<void> {
     confirm_token: event.confirmToken ?? null,
     outcome: event.outcome,
     outcome_verified: event.outcomeVerified ?? null,
-    error: event.error ?? null,
+    error: event.error ? event.error.slice(0, MAX_ERROR_LEN) : null,
     duration_ms: event.durationMs ?? null,
   };
   await appendFile(config.auditLogPath, `${JSON.stringify(line)}\n`, "utf8");

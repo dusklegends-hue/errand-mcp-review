@@ -23,9 +23,14 @@ const RISK_TABLE: Record<string, Record<string, TierPair>> = {
     schedule: { test: "AUTO_WRITE", live: "CONFIRM" },
     // Books the whole backlog's boards in one action -- the human sees and
     // confirms it in live mode, exactly like a single schedule.
+    // Proposes the backlog plan without booking; plan_ahead then books the
+    // named list it returns.
+    plan_preview: { test: "READ", live: "READ" },
     plan_ahead: { test: "AUTO_WRITE", live: "CONFIRM" },
-    // Reversible in both, and the fastest undo when a booking is wrong.
-    cancel: { test: "AUTO_WRITE", live: "AUTO_WRITE" },
+    // Live cancel takes the same two-step confirmation as a booking
+    // (customer IT, 2026-10-07): it removes a trip from a driver's day, and
+    // a re-book is not guaranteed the same driver or time.
+    cancel: { test: "AUTO_WRITE", live: "CONFIRM" },
   },
   // errand_dispatch was removed 2026-09-01 (WhatsApp = no BAA = HIPAA
   // exposure). Fail-closed means any stale caller gets unknown_action.

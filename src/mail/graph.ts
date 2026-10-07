@@ -2,28 +2,31 @@ import { getMsAccessToken } from "../auth/msTokens.js";
 import { stripHtml } from "./order.js";
 import type { InstanceConfig } from "../config.js";
 import { UpstreamError, request } from "../util/http.js";
+import { safeContentType, type MailMessage } from "./listing.js";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const UPSTREAM = "Microsoft Graph";
 
-export interface MailSummary {
-  id: string;
-  subject: string;
-  from: string | null;
-  received: string;
-  hasAttachments: boolean;
-  bodyPreview: string;
+function bodyAsText(body: unknown): string {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const content = String(b.content ?? "");
+  return String(b.contentType ?? "").toLowerCase() === "html" ? stripHtml(content) : content;
 }
 
 async function authHeaders(inst: InstanceConfig): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${await getMsAccessToken(inst)}` };
 }
 
+/**
+ * Recent inbox mail WITH bodies, so the request status can be worked out
+ * server-side. The body is PHI and stays in this process: tool code maps
+ * each message through mail/listing.ts before anything is returned.
+ */
 export async function listInbox(
   inst: InstanceConfig,
   opts: { limit: number; sinceDays: number; search?: string },
-): Promise<MailSummary[]> {
-  const select = "$select=id,subject,from,receivedDateTime,hasAttachments,bodyPreview";
+): Promise<MailMessage[]> {
+  const select = "$select=id,from,receivedDateTime,hasAttachments,body";
   let url: string;
   if (opts.search) {
     // Graph refuses $search combined with $filter/$orderby (the discord-mcp
@@ -39,19 +42,17 @@ export async function listInbox(
   return value
     .map((m) => ({
       id: String(m.id),
-      subject: String(m.subject ?? ""),
       from: ((m.from as Record<string, unknown> | undefined)?.emailAddress as Record<string, unknown> | undefined)
         ?.address as string | null ?? null,
       received: String(m.receivedDateTime ?? ""),
       hasAttachments: Boolean(m.hasAttachments),
-      bodyPreview: String(m.bodyPreview ?? ""),
+      bodyText: bodyAsText(m.body),
     }))
     .filter((m) => !opts.search || (m.received && Date.parse(m.received) >= cutoff));
 }
 
 export interface AttachmentBytes {
   attachmentId: string;
-  name: string;
   contentType: string;
   bytes: Buffer;
 }
@@ -61,6 +62,9 @@ export interface AttachmentBytes {
  * image attachment -- a transport-request mail has exactly one photo in the
  * expected case, and callers who hit the unexpected case get the full list
  * in the error to pick from.
+ *
+ * The sender's file name is deliberately not even requested from Graph: it
+ * is sender-controlled text, and nothing downstream needs it.
  */
 export async function getAttachment(
   inst: InstanceConfig,
@@ -68,7 +72,7 @@ export async function getAttachment(
   attachmentId?: string,
 ): Promise<AttachmentBytes> {
   const headers = await authHeaders(inst);
-  const listUrl = `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/attachments?$select=id,name,contentType,size`;
+  const listUrl = `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/attachments?$select=id,contentType,size`;
   const { json } = await request(UPSTREAM, listUrl, { headers });
   const all = ((json as { value?: unknown[] }).value ?? []) as Record<string, unknown>[];
 
@@ -81,7 +85,8 @@ export async function getAttachment(
   } else {
     target = all.find((a) => String(a.contentType ?? "").startsWith("image/"));
     if (!target) {
-      const listing = all.map((a) => `${a.id} (${a.contentType})`).join(", ") || "none";
+      // Ids and sanitized types only: attachment names are sender-controlled.
+      const listing = all.map((a) => `${a.id} (${safeContentType(String(a.contentType ?? ""))})`).join(", ") || "none";
       throw new UpstreamError(
         UPSTREAM,
         404,
@@ -97,24 +102,18 @@ export async function getAttachment(
   const { bytes } = await request(UPSTREAM, rawUrl, { headers, expectJson: false });
   return {
     attachmentId: String(target.id),
-    name: String(target.name ?? "attachment"),
     contentType: String(target.contentType ?? "application/octet-stream"),
     bytes: bytes!,
   };
 }
 
 export interface MessageBody {
-  subject: string;
   bodyText: string;
 }
 
-/** Full body fetch for server-side order parsing (PHI-blind mode). */
+/** Full body fetch for server-side request parsing (PHI-blind mode). */
 export async function getMessageBody(inst: InstanceConfig, messageId: string): Promise<MessageBody> {
-  const url = `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=subject,body`;
+  const url = `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=body`;
   const { json } = await request(UPSTREAM, url, { headers: await authHeaders(inst) });
-  const m = json as Record<string, unknown>;
-  const body = (m.body ?? {}) as Record<string, unknown>;
-  const content = String(body.content ?? "");
-  const isHtml = String(body.contentType ?? "").toLowerCase() === "html";
-  return { subject: String(m.subject ?? ""), bodyText: isHtml ? stripHtml(content) : content };
+  return { bodyText: bodyAsText((json as Record<string, unknown>).body) };
 }

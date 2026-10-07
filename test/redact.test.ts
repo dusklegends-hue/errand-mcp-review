@@ -13,13 +13,20 @@ describe("audit redaction", () => {
     const out = redactParams({
       patient: "Jane Doe",
       deliver_to: "410 Maple Ave",
-      driver_whatsapp: "15550000000",
+      driver_whatsapp: "15555550100",
       mail_id: "AAMk...",
     });
     expect(out.patient).toBe("<redacted:pii>");
     expect(out.deliver_to).toBe("<redacted:pii>");
     expect(out.driver_whatsapp).toBe("<redacted:pii>");
     expect(out.mail_id).toBe("AAMk..."); // ids stay -- they are the join key to the ledger
+  });
+
+  it("redacts free-text mailbox searches -- an operator can search by a member's name", () => {
+    const out = redactParams({ query: "Rita Reyes", search: "Reyes", since_days: 7 });
+    expect(out.query).toBe("<redacted:pii>");
+    expect(out.search).toBe("<redacted:pii>");
+    expect(out.since_days).toBe(7);
   });
 
   it("truncates long free text", () => {

@@ -27,6 +27,19 @@ describe("gate policy", () => {
     expect(test.type).toBe("auto");
   });
 
+  it("treats a live cancel like a live booking: two-step confirm (customer IT, 2026-10-07)", () => {
+    const params = { mail_id: "m1" };
+    const live = decide("errand_calendar", "cancel", params, ctx({ mode: "live" }));
+    expect(live.type).toBe("confirm_required");
+    const token = (live as { token: string }).token;
+    expect(decide("errand_calendar", "cancel", params, ctx({ mode: "live", confirmToken: token })).type).toBe("auto");
+    // A schedule confirmation can never be spent on a cancel, or the reverse.
+    const sched = decide("errand_calendar", "schedule", params, ctx({ mode: "live" }));
+    const cross = decide("errand_calendar", "cancel", params, ctx({ mode: "live", confirmToken: (sched as { token: string }).token }));
+    expect(cross.type).toBe("confirm_required");
+    expect(decide("errand_calendar", "cancel", params, ctx({ mode: "test" })).type).toBe("auto");
+  });
+
   it("denies the removed dispatch tool outright (WhatsApp path deleted 2026-09-01)", () => {
     for (const action of ["preview", "send", "resend"]) {
       expect(decide("errand_dispatch", action, {}, ctx())).toEqual({ type: "denied", reason: "unknown_action" });
@@ -93,7 +106,7 @@ describe("gate policy", () => {
   it("exposes exactly the planned surface", () => {
     expect(listActions()).toEqual({
       errand_email: ["list", "get_attachment"],
-      errand_calendar: ["freebusy", "schedule", "plan_ahead", "cancel"],
+      errand_calendar: ["freebusy", "schedule", "plan_preview", "plan_ahead", "cancel"],
       errand_fetch_handle: ["get"],
     });
   });
