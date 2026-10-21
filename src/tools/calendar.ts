@@ -27,10 +27,11 @@ const inputShape = {
   // PHI-blind (2026-09-01): member / pickup_from / deliver_to are
   // DELIBERATELY not arguments. The server reads them out of the order
   // email itself, so member data never passes through the operator layer.
-  /** Pin a specific driver instead of letting the server pick. */
+  /** Pin a specific driver instead of letting the server pick. Must be a roster name. */
   driver: z.string().max(100).optional(),
-  /** Delivery zone ("central", "east", ...). Prefers drivers whose roster
-   *  region matches; falls back to the whole roster if none are free. */
+  /** Delivery zone ("central", "east", ...), one the instance configures.
+   *  Prefers drivers whose roster region matches; falls back to the whole
+   *  roster if none are free. */
   region: z.string().max(60).optional(),
   /** plan_ahead: how many days back to scan the mailbox for backlog (default 3). */
   since_days: z.number().int().min(1).max(14).optional(),
@@ -184,6 +185,20 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
     mode: args.mode,
     confirmToken: args.confirm_token,
   };
+
+  // Driver and zone must be names this instance already knows (hostile
+  // review, 2026-10-21). Both are logged and both used to be free text --
+  // somewhere a member's name could be typed. Refused before the gate, so
+  // an unknown value is never logged or echoed back.
+  const roster = inst[args.mode]?.roster ?? [];
+  if (args.driver && !roster.some((d) => d.driver.toLowerCase() === args.driver!.trim().toLowerCase())) {
+    return errorResult(`driver is not on the ${args.mode} roster -- use one of: ${roster.map((d) => d.driver).join(", ")}`);
+  }
+  const zones = [...new Set([...Object.keys(inst.regions ?? {}), ...roster.flatMap((d) => (d.region ? [d.region] : []))].map((z) => z.trim().toLowerCase()))];
+  if (args.region && !zones.includes(args.region.trim().toLowerCase())) {
+    return errorResult(`zone is not one this instance knows -- use one of: ${zones.join(", ")}`);
+  }
+
   const slotQuery = () => ({
     now: new Date(),
     durationMinutes: inst.delivery.durationMinutes,
@@ -290,11 +305,14 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
       if (missing) return errorResult(missing);
       // PHI-blind: audit params for schedule carry no member data at all.
       // The confirmation fingerprint binds mail_id -- the job's identity.
+      // `ref` rides along so the approval prompt names the request the way
+      // the listing and the calendar event do (2026-10-21).
       return runAction({
         ...base,
         action: "schedule",
         auditParams: {
           mail_id: args.mail_id,
+          ref: `order-${orderRef(args.mail_id!)}`,
           driver: args.driver ?? null,
           region: args.region ?? null,
         },
@@ -330,7 +348,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
           ]);
           if (args.driver) {
             drivers = drivers.filter((d) => d.driver.toLowerCase() === args.driver!.toLowerCase());
-            if (drivers.length === 0) throw new Error(`driver "${args.driver}" is not on the ${args.mode} roster`);
+            if (drivers.length === 0) throw new Error(`driver is not on the ${args.mode} roster`);
           }
 
           let chosen: Booking & { region?: string };
@@ -459,7 +477,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
       return runAction({
         ...base,
         action: "cancel",
-        auditParams: { mail_id: args.mail_id },
+        auditParams: { mail_id: args.mail_id, ref: `order-${orderRef(args.mail_id!)}` },
         execute: () => oneAtATime(async () => {
           const job = await ledger.get(args.instance, args.mode, args.mail_id!);
           if (!job || job.state === "seen") throw new Error("no scheduled job for that mail id");

@@ -5,7 +5,7 @@ revised 2026-09-02 after an adversarial code review, 2026-09-30 after a
 second review pass corrected statements that overstated what the code did,
 and **2026-10-07 in response to your team's six review questions**. On
 2026-10-21, before sending, a second adversarial review of that revision
-found three more gaps in the code and several statements that overstated
+found further gaps in the code and several statements that overstated
 it; the fixes and corrections are listed below and included throughout.
 Most claims are checkable in this
 repository, and we encourage reading the code — it is small on purpose
@@ -75,6 +75,12 @@ Fixed at the same time:
   both have picked the same free driver. Booking, backlog booking and
   cancelling now queue behind each other. A test forces two bookings to
   overlap and checks that the second waits for the first.
+- **Driver and zone inputs accept only configured names.** They were free
+  text, logged as typed; a member's name could have been entered there.
+  An unknown value is now refused before it is logged, and never echoed.
+- **The approval step names the request** by its reference
+  (`order-1a2b3c4d`), the same reference the listing and the calendar event
+  carry, so the person approving can tell which trip it is.
 - **Token-refresh errors** from Microsoft or Google are now reduced to the
   HTTP status, like every other relayed error.
 - **Statements corrected** (no code change): who approves the confirmation
@@ -112,9 +118,10 @@ exactly one place: the assigned driver's calendar event. (An attached form
 image, which the software does not read, is filed on this machine as
 described above.) The trip's date and times also appear in
 the software's own job ledger and in the image folder's names, against a
-reference number but never next to a name. Nothing is sent to any other
-party; the requester is never contacted, and no other outside system is
-involved.
+reference number but never next to a name. Nothing else is sent anywhere:
+the requester is never contacted, and apart from Microsoft (the mailbox),
+Google (the calendars) and the assistant service (the tool results listed
+below), no outside system is involved.
 
 It is a small program that runs on one computer in your office (Node.js 20
 or newer). A person drives it through an assistant interface; it does
@@ -194,13 +201,14 @@ here.
 | Book one request | booking ref, calendar event id, driver name, whether the driver covers that zone. |
 | Backlog preview / book | per date: each driver's zones and trip count; per request: ref, message id (preview) or event id (book), driver, zone match; for each request that couldn't be booked: ref and the rule that stopped it; for each attachment-only request: ref, to book by hand. |
 | Cancel | the cancelled event id, the request's previous state, and whether the event had already been deleted by hand. |
-| Live confirmation step | the action and the arguments the operator supplied (ids, driver, zone), plus a one-time token. |
+| Live confirmation step | the action, the request's reference, the arguments the operator supplied (ids, driver, zone), and a one-time token. |
 | Fetch a stored result | an oversized list result (same fields as the listing); images only if image view is enabled. |
 | **Errors** | This software's own messages name the field or rule that failed, never a value. Errors from Microsoft or Google are reduced to provider, HTTP status and error code (e.g. `Microsoft Graph: HTTP 400 BadRequest`); their message text is dropped, because it can quote what was sent. |
 
 Arguments the assistant can pass: instance, mode, action, message id(s),
 driver name, zone name, day counts, result limit, and confirmation token.
-There is no free-text input; the mailbox search was removed on 2026-10-21.
+Driver and zone must be names the instance already has configured, and the
+mailbox search was removed on 2026-10-21, so there is no free-text field.
 The software cannot stop a person from typing member details into the assistant
 themselves, so the operating procedure is to refer to requests by ref, and
 that is part of training.
@@ -215,8 +223,8 @@ organization holds, on a plan we agree with you before go-live.
 
 - **Which Anthropic offerings carry a BAA.** Anthropic's published BAA
   documentation names its first-party API, Claude in Microsoft Foundry, and
-  Enterprise plans as the offerings a BAA covers. For Enterprise, HIPAA
-  configuration must be enabled.
+  Enterprise plans as the offerings a BAA covers. For Enterprise, some
+  features are covered only once HIPAA configuration is applied.
 - **Why a BAA would not cover this tool anyway.** The same documentation
   lists "Local MCP servers, which a member configures on their own
   computer" as **not covered**, and this software is exactly that.
@@ -240,10 +248,10 @@ organization holds, on a plan we agree with you before go-live.
   machine that holds request images, so Liberty Coding will sign a BAA
   with you covering that support access.
 - **If your compliance officer requires the assistant itself to be under a
-  BAA regardless**, the route Anthropic offers is Claude Enterprise with
-  HIPAA configuration, contracted with Anthropic. Before relying on it, we
-  would confirm with Anthropic that local tool servers remain usable under
-  that configuration.
+  BAA regardless**, the routes are the API route above, or Claude
+  Enterprise with HIPAA configuration, contracted with Anthropic. Before
+  relying on Enterprise, we would confirm with Anthropic that local tool
+  servers remain usable under that configuration.
 
 ## Network surface — exhaustive
 
@@ -332,8 +340,9 @@ access control.
     are not included.
 
   If the bound details change between the two steps, or a confirmation is
-  replayed or reused for a different action, it is refused. The second
-  step is a separate call, which the scheduler approves in the assistant
+  replayed or reused for a different action, it is refused. The approval
+  shows the request's reference, the same one the listing and the calendar
+  event carry. The second step is a separate call, which the scheduler approves in the assistant
   application; we configure that application to ask before every booking
   or cancellation, and that setting is on the install checklist. The
   software itself cannot tell whether a person or the assistant made the
@@ -397,7 +406,7 @@ running service. `.env.example` lists every setting.
 
 ## Verification
 
-- 130 automated tests, run with `npm test`. Among them:
+- 132 automated tests, run with `npm test`. Among them:
   - the tool handlers themselves, with Microsoft and Google simulated:
     - the exact booking-confirmation fields;
     - which calendar a booking lands on, in test and in live mode;
@@ -405,6 +414,8 @@ running service. `.env.example` lists every setting.
     - live cancel and backlog confirmations;
     - attachment-only requests reported for a person, not dropped;
     - two overlapping bookings running one after the other;
+    - only configured driver and zone names accepted, and an unknown one
+      neither logged nor echoed;
     - the PHI-free listing;
     - an audit log free of request data;
   - the startup refusals;
@@ -430,8 +441,9 @@ running service. `.env.example` lists every setting.
   flagged for the scheduler rather than read, and a live appointment-time
   booking has not yet been run (see *Booking behavior*).
 - A request re-sent as a new email is not recognized as a duplicate of the
-  first, so the scheduler should watch for corrected or repeated requests
-  in the backlog preview.
+  first. Because the backlog preview deliberately shows no member details,
+  the scheduler catches repeats in the mailbox itself or on the drivers'
+  calendars.
 - The job ledger is not pruned automatically.
 - No automatic updates: changes are deployed deliberately, which your IT
   may consider a feature.

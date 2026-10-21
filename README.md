@@ -25,7 +25,7 @@ Requires Node.js 20 or newer.
 
 ```
 npm ci
-npm test        # 130 automated tests
+npm test        # 132 automated tests
 npm run build   # strict TypeScript build
 ```
 

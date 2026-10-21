@@ -129,6 +129,23 @@ describe("schedule -- the booking confirmation (IT question 1)", () => {
     expect(google.insertEvent.mock.calls[0]![1]).toBe("ben@cal");
   });
 
+  it("accepts only roster drivers and configured zones, and never logs or echoes anything else", async () => {
+    const badDriver = await calendar.handleCalendar({ instance: "t", mode: "test", action: "schedule", mail_id: "m-x", driver: "Rita Reyes" });
+    const badZone = await calendar.handleCalendar({ instance: "t", mode: "test", action: "schedule", mail_id: "m-x", region: "Maple Ave" });
+    expect([badDriver.isError, badZone.isError]).toEqual([true, true]);
+    for (const r of [badDriver, badZone]) expect(text(r)).not.toMatch(/Rita|Maple/);
+    expect(readFileSync(path.join(tmp, "audit.jsonl"), "utf8")).not.toMatch(/Rita|Maple/);
+    expect(google.insertEvent).not.toHaveBeenCalled();
+    const ok = json(await calendar.handleCalendar({ instance: "t", mode: "test", action: "schedule", mail_id: "m-pin", driver: "ana", region: "Central" }));
+    expect(ok).toMatchObject({ status: "ok", driver: "Ana" });
+  });
+
+  it("names the request by its ref on the live approval step", async () => {
+    const first = json(await calendar.handleCalendar({ instance: "t", mode: "live", action: "schedule", mail_id: "m-approve" }));
+    expect(first.status).toBe("confirmation_required");
+    expect(first.action_summary.ref).toMatch(/^order-[0-9a-f]{8}$/);
+  });
+
   it("does not book, and writes nothing, when no driver is free for the exact window", async () => {
     google.freeBusy.mockImplementation(
       async (_i: unknown, ids: string[]) => new Map(ids.map((id) => [id, [{ start: "2026-10-14T15:00:00Z", end: "2026-10-14T15:30:00Z" }]])),
