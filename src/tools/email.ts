@@ -15,8 +15,9 @@ const inputShape = {
   action: z.enum(ACTIONS),
   mail_id: z.string().min(1).optional(),
   attachment_id: z.string().min(1).optional(),
-  /** Graph $search (KQL). Omitted, list reads the recent inbox. */
-  query: z.string().max(500).optional(),
+  // No free-text search (hostile review, 2026-10-21): a search box is an
+  // invitation to type a member's name, and the assistant would type one
+  // itself ("find Rita's ride"). The listing reads the recent inbox only.
   since_days: z.number().int().min(1).max(90).optional(),
   limit: z.number().int().min(1).max(50).optional(),
   /**
@@ -32,7 +33,6 @@ interface Args extends CommonArgs {
   action: (typeof ACTIONS)[number];
   mail_id?: string;
   attachment_id?: string;
-  query?: string;
   since_days?: number;
   limit?: number;
   disposition?: "handle" | "inline";
@@ -60,10 +60,10 @@ export async function handleEmail(args: Args): Promise<CallToolResult> {
       return runAction({
         ...base,
         action: "list",
-        auditParams: { query: args.query ?? null, since_days: sinceDays, limit },
+        auditParams: { since_days: sinceDays, limit },
         execute: async () => {
           const [mail, jobs] = await Promise.all([
-            listInbox(inst, { limit, sinceDays, search: args.query }),
+            listInbox(inst, { limit, sinceDays }),
             ledger.load(),
           ]);
           // PHI-blind (tightened 2026-10-07): no subject, preview, or other

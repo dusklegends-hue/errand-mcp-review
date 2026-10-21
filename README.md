@@ -11,7 +11,8 @@ are omitted.
 
 **Updated 2026-10-07** in response to the IT team's six review questions —
 the brief's first section, *Changes on 2026-10-07, by your question*, maps
-each question to what changed in the code.
+each question to what changed in the code. **Updated again 2026-10-21**
+after a second adversarial review; see *Changes on 2026-10-21*.
 
 **Start with [`docs/IT-REVIEW.md`](docs/IT-REVIEW.md)**: the security and
 data-handling brief, covering network surface, permissions, where data
@@ -24,7 +25,7 @@ Requires Node.js 20 or newer.
 
 ```
 npm ci
-npm test        # 127 automated tests
+npm test        # 130 automated tests
 npm run build   # strict TypeScript build
 ```
 

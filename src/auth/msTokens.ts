@@ -64,7 +64,9 @@ export async function getMsAccessToken(inst: InstanceConfig): Promise<string> {
       "Microsoft Graph",
       res.status,
       String(body.error ?? "refresh_failed"),
-      `token refresh refused (${String(body.error_description ?? "no detail")}) -- re-run get-token.mjs to sign in again`,
+      // Status and code only (2026-10-21): the provider's description is free
+      // text, and the rule for every relayed error is that none passes through.
+      `token refresh refused (HTTP ${res.status}) -- re-run get-token.mjs to sign in again`,
       false,
     );
   }

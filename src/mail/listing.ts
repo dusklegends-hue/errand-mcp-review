@@ -28,8 +28,13 @@ export interface SafeListing {
   received: string;
   from_domain: string | null;
   has_attachments: boolean;
-  /** complete = bookable; incomplete = some labeled fields present, `missing` names the rest; none = not a request. */
-  request: "complete" | "incomplete" | "none";
+  /**
+   * complete = bookable; incomplete = some labeled fields present, `missing`
+   * names the rest; unreadable = an attachment but no labeled lines in the
+   * email text, most likely a request sent only as a scan -- a person books
+   * it by hand; none = not a request.
+   */
+  request: "complete" | "incomplete" | "unreadable" | "none";
   missing?: string[];
 }
 
@@ -41,9 +46,27 @@ export function senderDomain(address: string | null): string | null {
   return domain || null;
 }
 
+/**
+ * Whether a message is an attachment-only request: nothing labeled in the
+ * email text, but something attached. The mailbox is dedicated to requests
+ * (a condition of install), so this is most likely a request sent as a scan.
+ * The software cannot read it, so it is flagged for a person rather than
+ * skipped (hostile review, 2026-10-21: skipping it silently could leave a
+ * member's ride unbooked with nobody noticing).
+ */
+export function isUnreadableRequest(m: Pick<MailMessage, "hasAttachments">, found: number): boolean {
+  return found === 0 && m.hasAttachments;
+}
+
 export function safeListing(m: MailMessage, requireAppointment: boolean): SafeListing {
   const parsed = parseOrder(m.bodyText, { requireAppointment });
-  const request = parsed.order ? "complete" : parsed.found > 0 ? "incomplete" : "none";
+  const request = parsed.order
+    ? "complete"
+    : parsed.found > 0
+      ? "incomplete"
+      : isUnreadableRequest(m, parsed.found)
+        ? "unreadable"
+        : "none";
   return {
     mail_id: m.id,
     ref: `order-${orderRef(m.id)}`,

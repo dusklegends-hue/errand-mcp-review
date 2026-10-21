@@ -57,7 +57,8 @@ export async function getGoogleAccessToken(inst: InstanceConfig): Promise<string
       "Google Calendar",
       res.status,
       String(body.error ?? "refresh_failed"),
-      `token refresh refused (${String(body.error_description ?? "no detail")}) -- re-run the consent flow`,
+      // Status and code only (2026-10-21), as for every relayed error.
+      `token refresh refused (HTTP ${res.status}) -- re-run the consent flow`,
       false,
     );
   }

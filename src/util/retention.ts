@@ -2,7 +2,7 @@
  * Retention sweeps (2026-09-01): the slip folder and spilled handle files are
  * the only disk locations that can carry PHI, and both are time-limited by
  * design. Rotated audit files (no PHI) get a long window of their own
- * (2026-10-07). Sweeps run at startup and daily, fire-and-forget -- a failed
+ * (2026-10-07). Sweeps run at startup and hourly, fire-and-forget -- a failed
  * delete (file open in the scheduler's viewer, say) is retried next sweep
  * rather than failing anything.
  */

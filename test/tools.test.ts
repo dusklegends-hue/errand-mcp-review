@@ -140,6 +140,24 @@ describe("schedule -- the booking confirmation (IT question 1)", () => {
   });
 });
 
+describe("one calendar write at a time", () => {
+  it("does not read availability for a second booking until the first is written", async () => {
+    // A slow availability read, so the two bookings would overlap without the queue.
+    google.freeBusy.mockImplementation(async (_i: unknown, ids: string[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return new Map(ids.map((id) => [id, []]));
+    });
+    await Promise.all([
+      calendar.handleCalendar({ instance: "t", mode: "test", action: "schedule", mail_id: "m-race-1" }),
+      calendar.handleCalendar({ instance: "t", mode: "test", action: "schedule", mail_id: "m-race-2" }),
+    ]);
+    const reads = google.freeBusy.mock.invocationCallOrder;
+    const writes = google.insertEvent.mock.invocationCallOrder;
+    expect(writes).toHaveLength(2);
+    expect(writes[0]!).toBeLessThan(reads[1]!);
+  });
+});
+
 describe("cancel", () => {
   it("treats an event already deleted by hand as cancelled, so the request can be re-booked", async () => {
     await calendar.handleCalendar({ instance: "t", mode: "test", action: "schedule", mail_id: "m-gone" });
@@ -158,6 +176,18 @@ describe("backlog booking (plan_preview / plan_ahead)", () => {
     expect(r.proposed[0]).toMatchObject({ mail_id: "inbox-1", driver: "Ben" });
     expect(google.insertEvent).not.toHaveBeenCalled();
     for (const leak of LEAKS) expect(JSON.stringify(r)).not.toContain(leak);
+  });
+
+  it("reports an attachment-only request for a person to book, never drops it", async () => {
+    graph.listInbox.mockResolvedValue([
+      { id: "inbox-1", from: "Requests@Example-Plan.org", received: "2026-10-07T15:00:00Z", hasAttachments: true, bodyText: REQUEST },
+      { id: "scan-only", from: "Requests@Example-Plan.org", received: "2026-10-07T16:00:00Z", hasAttachments: true, bodyText: "See attached." },
+      { id: "chatter", from: "someone@example.org", received: "2026-10-07T16:30:00Z", hasAttachments: false, bodyText: "Lunch Friday?" },
+    ]);
+    const r = json(await calendar.handleCalendar({ instance: "t", mode: "live", action: "plan_preview" }));
+    expect(r.mail_ids).toEqual(["inbox-1"]);
+    expect(r.unreadable).toEqual([{ ref: expect.stringMatching(/^order-/), reason: expect.stringContaining("by hand") }]);
+    expect(r.unreadable).toHaveLength(1);
   });
 
   it("refuses a live plan_ahead that does not name its list", async () => {
@@ -195,8 +225,8 @@ describe("errand_email", () => {
 });
 
 describe("audit log", () => {
-  it("holds no request data after all of the above, including a member-name search", async () => {
-    await email.handleEmail({ instance: "t", mode: "test", action: "list", query: "Rita Reyes" });
+  it("holds no request data after all of the above", async () => {
+    await email.handleEmail({ instance: "t", mode: "test", action: "list" });
     const log = readFileSync(path.join(tmp, "audit.jsonl"), "utf8");
     expect(log.length).toBeGreaterThan(0);
     for (const leak of LEAKS) expect(log).not.toContain(leak);

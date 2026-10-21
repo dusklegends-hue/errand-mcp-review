@@ -24,31 +24,21 @@ async function authHeaders(inst: InstanceConfig): Promise<Record<string, string>
  */
 export async function listInbox(
   inst: InstanceConfig,
-  opts: { limit: number; sinceDays: number; search?: string },
+  opts: { limit: number; sinceDays: number },
 ): Promise<MailMessage[]> {
   const select = "$select=id,from,receivedDateTime,hasAttachments,body";
-  let url: string;
-  if (opts.search) {
-    // Graph refuses $search combined with $filter/$orderby (the discord-mcp
-    // lesson), so the date window is applied client-side below.
-    url = `${GRAPH}/me/mailFolders/inbox/messages?$search=${encodeURIComponent(`"${opts.search}"`)}&$top=${opts.limit}&${select}`;
-  } else {
-    const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
-    url = `${GRAPH}/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=${opts.limit}&${select}`;
-  }
+  const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
+  const url = `${GRAPH}/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=${opts.limit}&${select}`;
   const { json } = await request(UPSTREAM, url, { headers: await authHeaders(inst) });
-  const cutoff = Date.now() - opts.sinceDays * 86_400_000;
   const value = ((json as { value?: unknown[] }).value ?? []) as Record<string, unknown>[];
-  return value
-    .map((m) => ({
-      id: String(m.id),
-      from: ((m.from as Record<string, unknown> | undefined)?.emailAddress as Record<string, unknown> | undefined)
-        ?.address as string | null ?? null,
-      received: String(m.receivedDateTime ?? ""),
-      hasAttachments: Boolean(m.hasAttachments),
-      bodyText: bodyAsText(m.body),
-    }))
-    .filter((m) => !opts.search || (m.received && Date.parse(m.received) >= cutoff));
+  return value.map((m) => ({
+    id: String(m.id),
+    from: ((m.from as Record<string, unknown> | undefined)?.emailAddress as Record<string, unknown> | undefined)
+      ?.address as string | null ?? null,
+    received: String(m.receivedDateTime ?? ""),
+    hasAttachments: Boolean(m.hasAttachments),
+    bodyText: bodyAsText(m.body),
+  }));
 }
 
 export interface AttachmentBytes {

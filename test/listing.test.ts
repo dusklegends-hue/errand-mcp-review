@@ -47,7 +47,13 @@ describe("safeListing", () => {
   });
 
   it("marks ordinary mail as not a request", () => {
-    expect(safeListing(msg("Lunch Friday?"), true).request).toBe("none");
+    expect(safeListing({ ...msg("Lunch Friday?"), hasAttachments: false }, true).request).toBe("none");
+  });
+
+  it("flags an attachment with no request lines for a person, instead of calling it not a request", () => {
+    const r = safeListing(msg("Please see the attached form."), true);
+    expect(r.request).toBe("unreadable");
+    expect(r.missing).toBeUndefined();
   });
 });
 

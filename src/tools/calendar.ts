@@ -6,6 +6,7 @@ import { findSoonestSlot, type DriverAvailability } from "../calendar/slots.js";
 import { assignFixedTrips, freeBusyRanges, pickDriverFor, tripWindow, type FixedTrip } from "../calendar/trip.js";
 import { config, getInstance, type InstanceConfig } from "../config.js";
 import { getAttachment, getMessageBody, listInbox } from "../mail/graph.js";
+import { isUnreadableRequest } from "../mail/listing.js";
 import { fileSlip, orderRef } from "../slips/slips.js";
 import { hourSlotsByDay, planAhead } from "../calendar/plan.js";
 import { sweepSlips } from "../util/retention.js";
@@ -99,6 +100,20 @@ interface Booking {
  * wrote to a single board calendar while availability read the drivers'
  * calendars, so a second booking could land on the same driver and time.
  */
+/**
+ * One calendar write at a time (hostile review, 2026-10-21). Reading free/busy
+ * and inserting the event are separate calls, so two bookings running at
+ * once could both see a driver free and both take the slot. Every action
+ * that writes a calendar (schedule, plan_ahead, cancel) queues behind the
+ * one before it in this process; a failure does not block the next.
+ */
+let calendarWrites: Promise<unknown> = Promise.resolve();
+export function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
+  const run = calendarWrites.then(fn, fn);
+  calendarWrites = run.catch(() => undefined);
+  return run;
+}
+
 async function bookTrip(
   inst: InstanceConfig,
   args: Args,
@@ -186,14 +201,16 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
    */
   const buildPlan = async (onlyIds?: string[]) => {
     // 1. The backlog: recent, labeled, not yet scheduled. All parsing is
-    //    server-side (PHI-blind); mail with no labeled lines at all is
-    //    ignored silently, partially-labeled mail is reported by ref so a
-    //    human can fix the email.
+    //    server-side (PHI-blind). Partially-labeled mail is reported by ref
+    //    so a human can fix the email; mail with an attachment but no
+    //    labeled lines (a request sent only as a scan) is reported by ref
+    //    for a person to book by hand; mail with neither is not a request.
     const mail = await listInbox(inst, { limit: 50, sinceDays: args.since_days ?? 3 });
     const jobs = await ledger.load();
     const wanted = onlyIds ? new Set(onlyIds) : null;
     const pool: { mailId: string; region: string | null; order: ParsedOrder }[] = [];
     const malformed: { ref: string; missing: string[] }[] = [];
+    const unreadable: { ref: string; reason: string }[] = [];
     for (const m of mail) {
       if (wanted && !wanted.has(m.id)) continue;
       const state = jobs.get(`${args.instance}:${args.mode}:${m.id}`)?.state ?? null;
@@ -203,6 +220,11 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
         pool.push({ mailId: m.id, region: regionForAddress(parsed.order.deliverTo, inst.regions), order: parsed.order });
       } else if (parsed.found > 0) {
         malformed.push({ ref: `order-${orderRef(m.id)}`, missing: parsed.missing });
+      } else if (isUnreadableRequest(m, parsed.found)) {
+        unreadable.push({
+          ref: `order-${orderRef(m.id)}`,
+          reason: "attachment only, no request lines in the email text -- book it by hand",
+        });
       }
     }
     const skipped = (onlyIds ?? [])
@@ -236,7 +258,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
       boards = plan.boards;
       for (const u of plan.unassigned) unassigned.push({ ref: `order-${orderRef(u.mailId)}`, reason: u.reason });
     }
-    return { pool, malformed, skipped, assignments, boards, unassigned };
+    return { pool, malformed, unreadable, skipped, assignments, boards, unassigned };
   };
 
   switch (args.action) {
@@ -276,7 +298,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
           driver: args.driver ?? null,
           region: args.region ?? null,
         },
-        execute: async () => {
+        execute: () => oneAtATime(async () => {
           const mailId = args.mail_id!;
           const existing = await ledger.get(args.instance, args.mode, mailId);
           if (existing && existing.state !== "seen") {
@@ -356,7 +378,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
             driver: chosen.driver,
             region_match: zone ? chosen.region?.trim().toLowerCase() === zone.trim().toLowerCase() : null,
           };
-        },
+        }),
       });
     }
 
@@ -379,6 +401,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
             boards: plan.boards,
             unassigned: plan.unassigned,
             malformed: plan.malformed,
+            unreadable: plan.unreadable,
             mail_ids: plan.assignments.map((a) => a.mailId),
             next: "nothing is booked yet -- to book exactly these requests, call plan_ahead with this mail_ids list",
           };
@@ -397,7 +420,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
         ...base,
         action: "plan_ahead",
         auditParams: { since_days: args.since_days ?? 3, from_day: args.from_day ?? 1, mail_ids: args.mail_ids ?? null },
-        execute: async () => {
+        execute: () => oneAtATime(async () => {
           const plan = await buildPlan(args.mail_ids);
 
           // Book each trip on its driver's calendar.
@@ -422,10 +445,11 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
             failed,
             unassigned: plan.unassigned,
             malformed: plan.malformed,
+            unreadable: plan.unreadable,
             skipped: plan.skipped,
             note: "PHI-blind: refs, drivers and zone counts only -- names, addresses and trip times are on the calendar events",
           };
-        },
+        }),
       });
     }
 
@@ -436,7 +460,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
         ...base,
         action: "cancel",
         auditParams: { mail_id: args.mail_id },
-        execute: async () => {
+        execute: () => oneAtATime(async () => {
           const job = await ledger.get(args.instance, args.mode, args.mail_id!);
           if (!job || job.state === "seen") throw new Error("no scheduled job for that mail id");
           let eventAlreadyGone = false;
@@ -455,7 +479,7 @@ export async function handleCalendar(args: Args): Promise<CallToolResult> {
           // the history of the original booking survives the cancel.
           await ledger.append({ instance: args.instance, mode: args.mode, mailId: args.mail_id!, state: "seen" });
           return { cancelled_event: job.eventId ?? null, was_state: job.state, event_already_gone: eventAlreadyGone };
-        },
+        }),
       });
     }
 
