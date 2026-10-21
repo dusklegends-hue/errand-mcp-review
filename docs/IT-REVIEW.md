@@ -218,7 +218,7 @@ that is part of training.
 The assistant is **Claude, made by Anthropic**, operated through Anthropic's
 desktop application. Stated plainly, the assistant **does not operate under
 a HIPAA BAA today.** The demonstrations so far ran on Liberty Coding's own
-Claude account, using staged, fictional requests only. The production operator would use an account your
+Claude account. The production operator would use an account your
 organization holds, on a plan we agree with you before go-live.
 
 - **Which Anthropic offerings carry a BAA.** Anthropic's published BAA
@@ -244,9 +244,8 @@ organization holds, on a plan we agree with you before go-live.
   API under your organization's BAA, in place of the desktop application.
   That is a build of similar size to the no-assistant screen; we would
   scope it with you if you prefer it.
-- **Liberty Coding's own role.** Supporting the install means access to a
-  machine that holds request images, so Liberty Coding will sign a BAA
-  with you covering that support access.
+- **Liberty Coding's own role.** If a BAA with Liberty Coding is needed,
+  we will sign one.
 - **If your compliance officer requires the assistant itself to be under a
   BAA regardless**, the routes are the API route above, or Claude
   Enterprise with HIPAA configuration, contracted with Anthropic. Before
